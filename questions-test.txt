@@ -1,0 +1,21 @@
+# Questions de référence — Corpus Pydantic AI
+# Format : 6 happy paths, 2 ambiguës, 2 adversariales
+
+## Happy paths (réponse clairement dans le corpus)
+
+1. Comment définir un outil dans Pydantic AI ?
+2. Quelle est la différence entre Agent et RunContext ?
+3. Comment streamer une réponse avec Pydantic AI ?
+4. Comment déclarer des dépendances dans un agent Pydantic AI ?
+5. Quels modèles LLM sont supportés par Pydantic AI ?
+6. Comment gérer l'historique des messages dans Pydantic AI ?
+
+## Ambiguës (plusieurs sections du corpus pourraient répondre)
+
+7. Comment gérer les erreurs dans Pydantic AI ?
+8. Comment tester un agent Pydantic AI ?
+
+## Adversariales (hors corpus — doit déclencher "je ne sais pas")
+
+9. Quel est le PIB de la France en 2023 ?
+10. Qui a gagné la Coupe du Monde de football en 2022 ?
