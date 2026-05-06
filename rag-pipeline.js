@@ -1,8 +1,12 @@
-// Phases 4-5 : Retrieval + Génération LLM avec prompt RAG strict
+// Phases 4-6 : Retrieval + Génération + Observabilité (latence, tokens, coût)
 import { Pinecone } from '@pinecone-database/pinecone';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+
+// $0.2/1M tokens in, $0.6/1M tokens out — mistral-small-latest
+const COST_IN  = 0.2 / 1_000_000;
+const COST_OUT = 0.6 / 1_000_000;
 
 // --- Embedding ---
 
@@ -51,7 +55,7 @@ export async function retrieveContext(query, topK = 5) {
     }));
 }
 
-// --- Phase 5 : generateCompletion ---
+// --- Phase 5 : generateCompletion (Phase 6 : retourne aussi `usage`) ---
 
 async function generateCompletion(question, context) {
   const contextText = context
@@ -93,23 +97,84 @@ Question : ${question}`;
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  return {
+    content: data.choices[0].message.content,
+    usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
+  };
 }
 
-// --- Phase 5 : pipeline complète (sans observabilité encore) ---
+// --- Phase 6 : ragQuery — pipeline complète + observability ---
 
 export async function ragQuery(question, options = {}) {
-  const { topK = 5 } = options;
+  const { topK = 5, verbose = false } = options;
 
+  if (verbose) console.log(`[ragQuery] question="${question.slice(0, 70)}"`);
+
+  // RETRIEVE
+  const t0 = Date.now();
   const chunks = await retrieveContext(question, topK);
+  const retrievalMs = Date.now() - t0;
 
+  const topScore = chunks[0]?.score ?? 0;
+  const avgScore = chunks.length
+    ? chunks.reduce((s, c) => s + c.score, 0) / chunks.length
+    : 0;
+
+  if (verbose) {
+    console.log(
+      `[retrieve] topK=${chunks.length} retournés en ${retrievalMs}ms, ` +
+      `top score ${topScore.toFixed(2)}, avg score ${avgScore.toFixed(2)}`
+    );
+    chunks.forEach(c =>
+      console.log(`  [${c.score.toFixed(2)}] ${c.source}, "${c.text.slice(0, 60)}..."`)
+    );
+  }
+
+  // Pas de chunks pertinents → "je ne sais pas" sans appeler le LLM
   if (chunks.length === 0) {
+    if (verbose) console.log('[generate] aucun chunk pertinent, réponse directe');
     return {
       answer: 'Je ne trouve pas cette information dans les documents fournis.',
       chunks: [],
+      chunksUsed: 0,
+      metrics: {
+        topScore: 0, avgScore: 0,
+        retrievalMs, generationMs: 0,
+        promptTokens: 0, completionTokens: 0,
+        costUSD: 0,
+      },
     };
   }
 
-  const answer = await generateCompletion(question, chunks);
-  return { answer, chunks };
+  // GENERATE
+  const t1 = Date.now();
+  const { content: answer, usage } = await generateCompletion(question, chunks);
+  const generationMs = Date.now() - t1;
+
+  const promptTokens     = usage.prompt_tokens     ?? 0;
+  const completionTokens = usage.completion_tokens ?? 0;
+  const costUSD = promptTokens * COST_IN + completionTokens * COST_OUT;
+
+  if (verbose) {
+    console.log(
+      `[generate] mistral-small-latest, ${promptTokens} tokens in / ` +
+      `${completionTokens} tokens out, ${generationMs}ms, $${costUSD.toFixed(6)}`
+    );
+    console.log(`[ragQuery] total ${retrievalMs + generationMs}ms`);
+  }
+
+  return {
+    answer,
+    chunks,
+    chunksUsed: chunks.length,
+    metrics: {
+      topScore,
+      avgScore,
+      retrievalMs,
+      generationMs,
+      promptTokens,
+      completionTokens,
+      costUSD: parseFloat(costUSD.toFixed(6)),
+    },
+  };
 }
