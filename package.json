@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "index": "node scripts/create-index.js",
+    "start": "node cli.js",
     "eval": "node scripts/eval.js"
   },
   "dependencies": {
