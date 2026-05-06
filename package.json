@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "index": "node scripts/create-index.js"
+    "index": "node scripts/create-index.js",
+    "eval": "node scripts/eval.js"
   },
   "dependencies": {
     "@pinecone-database/pinecone": "^3.0.3",
