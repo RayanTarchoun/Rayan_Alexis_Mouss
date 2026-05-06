@@ -1,4 +1,4 @@
-// Phases 4-6 : Retrieval + Génération + Observabilité (latence, tokens, coût)
+// Phases 4-7 : Retrieval + Génération + Pipeline RAG + Citations structurées
 import { Pinecone } from '@pinecone-database/pinecone';
 import 'dotenv/config';
 
@@ -55,7 +55,7 @@ export async function retrieveContext(query, topK = 5) {
     }));
 }
 
-// --- Phase 5 : generateCompletion (Phase 6 : retourne aussi `usage`) ---
+// --- Phase 5 : generateCompletion ---
 
 async function generateCompletion(question, context) {
   const contextText = context
@@ -103,7 +103,34 @@ Question : ${question}`;
   };
 }
 
+// --- Phase 7 : formatage des sources (dédupliquées par fichier) ---
+
+function formatSources(chunks) {
+  const best = new Map();
+  chunks.forEach((chunk, i) => {
+    const file = chunk.source || 'Source inconnue';
+    if (!best.has(file) || best.get(file).relevance < chunk.score) {
+      best.set(file, { index: i + 1, file, relevance: chunk.score });
+    }
+  });
+  return Array.from(best.values());
+}
+
+// --- Phase 7 : détection des citations [Source N] qui pointent vers un chunk inexistant ---
+
+function detectOrphanCitations(answer, numSources) {
+  const orphans = [];
+  const re = /\[Source (\d+)\]/g;
+  let m;
+  while ((m = re.exec(answer)) !== null) {
+    const n = parseInt(m[1]);
+    if (n > numSources) orphans.push(n);
+  }
+  return orphans;
+}
+
 // --- Phase 6 : ragQuery — pipeline complète + observability ---
+// --- Phase 7 : ajout sources structurées + détection des orphelines ---
 
 export async function ragQuery(question, options = {}) {
   const { topK = 5, verbose = false } = options;
@@ -135,13 +162,14 @@ export async function ragQuery(question, options = {}) {
     if (verbose) console.log('[generate] aucun chunk pertinent, réponse directe');
     return {
       answer: 'Je ne trouve pas cette information dans les documents fournis.',
+      sources: [],
       chunks: [],
       chunksUsed: 0,
       metrics: {
         topScore: 0, avgScore: 0,
         retrievalMs, generationMs: 0,
         promptTokens: 0, completionTokens: 0,
-        costUSD: 0,
+        costUSD: 0, orphanCitations: [],
       },
     };
   }
@@ -163,8 +191,13 @@ export async function ragQuery(question, options = {}) {
     console.log(`[ragQuery] total ${retrievalMs + generationMs}ms`);
   }
 
+  // Phase 7 — sources structurées + détection de citations orphelines
+  const sources         = formatSources(chunks);
+  const orphanCitations = detectOrphanCitations(answer, chunks.length);
+
   return {
     answer,
+    sources,
     chunks,
     chunksUsed: chunks.length,
     metrics: {
@@ -175,6 +208,7 @@ export async function ragQuery(question, options = {}) {
       promptTokens,
       completionTokens,
       costUSD: parseFloat(costUSD.toFixed(6)),
+      orphanCitations,
     },
   };
 }
