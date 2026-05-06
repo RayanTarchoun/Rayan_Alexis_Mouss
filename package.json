@@ -2,5 +2,11 @@
   "name": "mini-perplexity",
   "version": "0.1.0",
   "type": "module",
-  "scripts": {}
+  "scripts": {
+    "index": "node scripts/create-index.js"
+  },
+  "dependencies": {
+    "@pinecone-database/pinecone": "^3.0.3",
+    "dotenv": "^16.4.5"
+  }
 }
