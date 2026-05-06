@@ -1,12 +1,12 @@
-// Phases 4-7 : Retrieval + Génération + Pipeline RAG + Citations structurées
+// Phases 4-7 : Retrieval + Generation + Pipeline RAG + Citations structurées
 import { Pinecone } from '@pinecone-database/pinecone';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
 // $0.2/1M tokens in, $0.6/1M tokens out — mistral-small-latest
-const COST_IN  = 0.2 / 1_000_000;
-const COST_OUT = 0.6 / 1_000_000;
+const COST_IN  = 0.2  / 1_000_000;
+const COST_OUT = 0.6  / 1_000_000;
 
 // --- Embedding ---
 
@@ -32,8 +32,9 @@ async function embedText(text) {
 }
 
 // --- Phase 4 : retrieveContext ---
+// threshold rendu paramétrable en Phase 11 (défaut 0.5 = comportement original)
 
-export async function retrieveContext(query, topK = 5) {
+export async function retrieveContext(query, topK = 5, threshold = 0.5) {
   if (!query || !query.trim()) return [];
 
   const queryVector = await embedText(query);
@@ -46,7 +47,7 @@ export async function retrieveContext(query, topK = 5) {
   });
 
   return results.matches
-    .filter(m => m.score >= 0.5)
+    .filter(m => m.score >= threshold)
     .map(m => ({
       text: m.metadata?.text ?? '',
       source: m.metadata?.source ?? 'Source inconnue',
@@ -56,8 +57,9 @@ export async function retrieveContext(query, topK = 5) {
 }
 
 // --- Phase 5 : generateCompletion ---
+// temperature rendue paramétrable en Phase 11 (défaut 0.1 = comportement original)
 
-async function generateCompletion(question, context) {
+async function generateCompletion(question, context, { temperature = 0.1 } = {}) {
   const contextText = context
     .map((c, i) => `[Source ${i + 1} - ${c.source}]\n${c.text}`)
     .join('\n\n---\n\n');
@@ -87,7 +89,7 @@ Question : ${question}`;
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userMessage  },
       ],
-      temperature: 0.1,
+      temperature,
     }),
   });
 
@@ -116,8 +118,6 @@ function formatSources(chunks) {
   return Array.from(best.values());
 }
 
-// --- Phase 7 : détection des citations [Source N] qui pointent vers un chunk inexistant ---
-
 function detectOrphanCitations(answer, numSources) {
   const orphans = [];
   const re = /\[Source (\d+)\]/g;
@@ -130,16 +130,16 @@ function detectOrphanCitations(answer, numSources) {
 }
 
 // --- Phase 6 : ragQuery — pipeline complète + observability ---
-// --- Phase 7 : ajout sources structurées + détection des orphelines ---
+// Phase 11 : ajout des options threshold et temperature
 
 export async function ragQuery(question, options = {}) {
-  const { topK = 5, verbose = false } = options;
+  const { topK = 5, threshold = 0.5, temperature = 0.1, verbose = false } = options;
 
   if (verbose) console.log(`[ragQuery] question="${question.slice(0, 70)}"`);
 
   // RETRIEVE
   const t0 = Date.now();
-  const chunks = await retrieveContext(question, topK);
+  const chunks = await retrieveContext(question, topK, threshold);
   const retrievalMs = Date.now() - t0;
 
   const topScore = chunks[0]?.score ?? 0;
@@ -176,7 +176,7 @@ export async function ragQuery(question, options = {}) {
 
   // GENERATE
   const t1 = Date.now();
-  const { content: answer, usage } = await generateCompletion(question, chunks);
+  const { content: answer, usage } = await generateCompletion(question, chunks, { temperature });
   const generationMs = Date.now() - t1;
 
   const promptTokens     = usage.prompt_tokens     ?? 0;
@@ -192,8 +192,8 @@ export async function ragQuery(question, options = {}) {
   }
 
   // Phase 7 — sources structurées + détection de citations orphelines
-  const sources         = formatSources(chunks);
-  const orphanCitations = detectOrphanCitations(answer, chunks.length);
+  const sources          = formatSources(chunks);
+  const orphanCitations  = detectOrphanCitations(answer, chunks.length);
 
   return {
     answer,

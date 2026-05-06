@@ -5,7 +5,9 @@
   "scripts": {
     "index": "node scripts/create-index.js",
     "start": "node cli.js",
-    "eval": "node scripts/eval.js"
+    "eval": "node scripts/eval.js",
+    "audit": "node scripts/audit-retrieval.js",
+    "audit:table": "node scripts/build-eval-table.js"
   },
   "dependencies": {
     "@langchain/core": "^0.3.0",
