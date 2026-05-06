@@ -1,13 +1,17 @@
 {
   "name": "mini-perplexity",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "index": "node scripts/create-index.js",
     "eval": "node scripts/eval.js"
   },
   "dependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/mistralai": "^0.2.0",
+    "@langchain/pinecone": "^0.1.3",
     "@pinecone-database/pinecone": "^3.0.3",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "langchain": "^0.3.0"
   }
 }
