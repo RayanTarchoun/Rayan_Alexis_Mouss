@@ -1,6 +1,9 @@
 // Phase 10 : Interface CLI interactive
+// Phase 16 (J5) : utilise formatResponse pour disclaimer + note pertinence
 import readline from 'readline';
 import { ragQuery } from './rag-pipeline.js';
+import { formatResponse } from './lib/format-response.js';
+import { getSessionStats } from './lib/cost-tracker.js';
 
 const MAX_QUESTION_LENGTH = 2000;
 
@@ -11,7 +14,8 @@ const rl = readline.createInterface({
 
 // Fermeture propre sur Ctrl+C — pas de promesse pendante
 process.on('SIGINT', () => {
-  console.log('\nAu revoir !');
+  const stats = getSessionStats();
+  console.log(`\n\nAu revoir ! Session : ${stats.requests} requête(s), $${stats.totalUSD.toFixed(4)}`);
   rl.close();
   process.exit(0);
 });
@@ -27,10 +31,8 @@ async function main() {
   while (true) {
     const question = await ask('> ');
 
-    // Question vide → on redemande sans appeler le pipeline
     if (!question.trim()) continue;
 
-    // Question trop longue → rejet explicite
     if (question.length > MAX_QUESTION_LENGTH) {
       console.log(
         `\nQuestion trop longue (${question.length} caractères, max ${MAX_QUESTION_LENGTH}). ` +
@@ -44,15 +46,13 @@ async function main() {
     try {
       const result = await ragQuery(question, { topK: 5, verbose: false });
 
-      console.log('\n' + result.answer);
-
-      if (result.sources.length > 0) {
-        const fileList = result.sources.map(s => s.file).join(', ');
-        console.log(`\nSources : [${fileList}]`);
-        console.log(`Pertinence moyenne : ${result.metrics.avgScore.toFixed(2)}`);
-      }
-
-      console.log('');
+      // Phase 16 : passage par formatResponse (footer + note pertinence)
+      const formatted = formatResponse(
+        result.answer,
+        result.sources,
+        result.confidence?.topScore ?? null
+      );
+      console.log('\n' + formatted + '\n');
     } catch (err) {
       console.error(`\nErreur : ${err.message}\n`);
     }
