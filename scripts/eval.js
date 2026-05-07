@@ -27,6 +27,7 @@ async function runEval() {
         `✓ top=${r.metrics.topScore.toFixed(2)} avg=${r.metrics.avgScore.toFixed(2)} ` +
         `${r.metrics.promptTokens}/${r.metrics.completionTokens} tok $${r.metrics.costUSD.toFixed(6)}`
       );
+      console.log(`   → ${r.answer}\n`);
     } catch (err) {
       console.log(`✗ ${err.message}`);
       results.push({ question: q, error: err.message });
@@ -42,14 +43,15 @@ async function runEval() {
   // Génération du tableau Markdown
   let md = `# Tableau d'évaluation — Baseline\n\n`;
   md += `_Colonne Pertinence et Fidélité : notes humaines à remplir (1-5)_\n\n`;
-  md += `| # | Question | Top-1 score | Avg top-3 | Tokens (in/out) | Coût ($) | Pertinence (1-5) | Fidélité (1-5) | Notes |\n`;
-  md += `|---|----------|-------------|-----------|-----------------|----------|------------------|----------------|-------|\n`;
+  md += `| # | Question | Réponse | Top-1 score | Avg top-3 | Tokens (in/out) | Coût ($) | Pertinence (1-5) | Fidélité (1-5) | Notes |\n`;
+  md += `|---|----------|---------|-------------|-----------|-----------------|----------|------------------|----------------|-------|\n`;
 
   results.forEach((r, i) => {
     if (r.error) {
-      md += `| ${i + 1} | ${r.question} | ERR | ERR | ERR | ERR | - | - | ${r.error} |\n`;
+      md += `| ${i + 1} | ${r.question} | ERR | ERR | ERR | ERR | ERR | - | - | ${r.error} |\n`;
     } else {
-      md += `| ${i + 1} | ${r.question} | ${r.metrics.topScore.toFixed(2)} | ${r.metrics.avgScore.toFixed(2)} | ${r.metrics.promptTokens}/${r.metrics.completionTokens} | ${r.metrics.costUSD.toFixed(6)} | _/5_ | _/5_ | |\n`;
+      const shortAnswer = r.answer.replace(/\n/g, ' ').replace(/\|/g, '\\|').slice(0, 200);
+      md += `| ${i + 1} | ${r.question} | ${shortAnswer} | ${r.metrics.topScore.toFixed(2)} | ${r.metrics.avgScore.toFixed(2)} | ${r.metrics.promptTokens}/${r.metrics.completionTokens} | ${r.metrics.costUSD.toFixed(6)} | _/5_ | _/5_ | |\n`;
     }
   });
 

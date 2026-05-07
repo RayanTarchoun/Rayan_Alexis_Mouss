@@ -5,8 +5,8 @@ import { join } from 'path';
 import 'dotenv/config';
 
 export const CONFIG = {
-  chunkSize: 400,
-  overlap: 50,
+  chunkSize: 200,
+  overlap: 30,
   batchSize: 50,
   embedConcurrency: 20, // textes envoyés par appel Mistral (max ~32)
 };
