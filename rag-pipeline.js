@@ -2,6 +2,7 @@
 // Phase 12 (J5) : embedText et generateCompletion passent par withRetry + circuit breaker
 // Phase 13 (J5) : cost tracking centralisé via lib/cost-tracker.js
 // Phase 14 (J5) : computeConfidence(matches) + CONFIDENCE_THRESHOLD env (défaut 0.75)
+// Phase 15 (J5) : court-circuit "Je ne sais pas" AVANT l'appel LLM si !confidence.sufficient
 import { Pinecone } from '@pinecone-database/pinecone';
 import { withRetry, mistralBreaker } from './lib/resilience.js';
 import { trackCost, logCostStats } from './lib/cost-tracker.js';
@@ -9,6 +10,10 @@ import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const MODEL = 'mistral-small-latest';
+
+// Phase 15 : message standardisé exact (cf. spec J5 phase 4)
+const NO_ANSWER_MESSAGE =
+  "Je ne dispose pas d'informations suffisantes dans les documents fournis pour répondre à cette question.";
 
 // --- Helper réseau ---
 
@@ -64,20 +69,12 @@ export async function retrieveContext(query, topK = 5, threshold = 0.5) {
     }));
 }
 
-// --- Phase 14 (J5) : computeConfidence ---
+// --- Phase 14 : computeConfidence ---
 
-/**
- * computeConfidence — calcule un score de confiance à partir des chunks retournés.
- * Le seuil `sufficient` est lu depuis CONFIDENCE_THRESHOLD (.env), défaut 0.75.
- *
- * @param {Array} matches — chunks (avec un champ .score) ou matches Pinecone bruts
- * @returns {{ topScore: number, avgScore: number, sufficient: boolean }}
- */
 export function computeConfidence(matches) {
   if (!matches || matches.length === 0) {
     return { topScore: 0, avgScore: 0, sufficient: false };
   }
-
   const scores = matches.map(m => m.score ?? 0).filter(Number.isFinite);
   const topScore = scores[0] ?? 0;
   const avgScore = scores.length
@@ -85,9 +82,7 @@ export function computeConfidence(matches) {
     : 0;
 
   const threshold = parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.75');
-  const sufficient = topScore >= threshold;
-
-  return { topScore, avgScore, sufficient };
+  return { topScore, avgScore, sufficient: topScore >= threshold };
 }
 
 // --- generateCompletion ---
@@ -97,13 +92,12 @@ async function generateCompletion(question, context, { temperature = 0.1 } = {})
     .map((c, i) => `[Source ${i + 1} - ${c.source}]\n${c.text}`)
     .join('\n\n---\n\n');
 
-  const systemPrompt = `Tu es un assistant expert qui répond uniquement à partir des sources fournies.
-
-Règles :
-- Réponds uniquement à partir du contexte ci-dessous. N'utilise pas ta mémoire interne.
-- Si la réponse n'est pas dans le contexte, dis explicitement "Je ne trouve pas cette information dans les documents fournis."
-- Cite toujours tes sources entre crochets : [Source 1], [Source 2], etc.
-- Sois précis et concis.`;
+  const systemPrompt = `Tu es un assistant documentaire. Règles absolues :
+1. Réponds UNIQUEMENT à partir du contexte fourni.
+2. Si le contexte ne contient pas suffisamment d'informations pour répondre, réponds exactement :
+"${NO_ANSWER_MESSAGE}"
+3. Ne complète JAMAIS avec tes connaissances générales.
+4. Cite tes sources entre crochets : [Source 1], [Source 2], etc.`;
 
   const userMessage = `Contexte :
 ${contextText}
@@ -165,6 +159,28 @@ function detectOrphanCitations(answer, numSources) {
   return orphans;
 }
 
+// --- Helper : réponse "je ne sais pas" sans appel LLM ---
+
+function noAnswerResponse(confidence, retrievalMs) {
+  return {
+    answer: NO_ANSWER_MESSAGE,
+    sources: [],
+    chunks: [],
+    chunksUsed: 0,
+    confidence,
+    metrics: {
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
+      retrievalMs,
+      generationMs: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      costUSD: 0,
+      orphanCitations: [],
+    },
+  };
+}
+
 // --- ragQuery ---
 
 export async function ragQuery(question, options = {}) {
@@ -176,7 +192,6 @@ export async function ragQuery(question, options = {}) {
   const chunks = await retrieveContext(question, topK, threshold);
   const retrievalMs = Date.now() - t0;
 
-  // Phase 14 : score de confiance basé sur les chunks récupérés
   const confidence = computeConfidence(chunks);
 
   if (verbose) {
@@ -187,22 +202,14 @@ export async function ragQuery(question, options = {}) {
     );
   }
 
-  if (chunks.length === 0) {
-    return {
-      answer: 'Je ne trouve pas cette information dans les documents fournis.',
-      sources: [],
-      chunks: [],
-      chunksUsed: 0,
-      confidence,
-      metrics: {
-        topScore: 0, avgScore: 0,
-        retrievalMs, generationMs: 0,
-        promptTokens: 0, completionTokens: 0,
-        costUSD: 0, orphanCitations: [],
-      },
-    };
+  // Phase 15 : court-circuit AVANT le LLM si la confiance n'est pas suffisante.
+  // Aucun appel API → coût $0, économie de tokens garantie.
+  if (!confidence.sufficient) {
+    if (verbose) console.log('[ragQuery] confidence insuffisante → "je ne sais pas" (pas d\'appel LLM)');
+    return noAnswerResponse(confidence, retrievalMs);
   }
 
+  // GENERATE
   const t1 = Date.now();
   const { content: answer, usage } = await generateCompletion(question, chunks, { temperature });
   const generationMs = Date.now() - t1;
