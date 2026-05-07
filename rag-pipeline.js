@@ -1,14 +1,13 @@
 // Phases 4-7 + 11 (J4) : Retrieval + Generation + Citations + paramètres configurables
-// Phase 12 (J5)         : embedText et generateCompletion passent par withRetry + circuit breaker
+// Phase 12 (J5) : embedText et generateCompletion passent par withRetry + circuit breaker
+// Phase 13 (J5) : cost tracking centralisé via lib/cost-tracker.js (avec compteur session)
 import { Pinecone } from '@pinecone-database/pinecone';
 import { withRetry, mistralBreaker } from './lib/resilience.js';
+import { trackCost, logCostStats } from './lib/cost-tracker.js';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-
-// $0.2/1M tokens in, $0.6/1M tokens out — mistral-small-latest
-const COST_IN  = 0.2  / 1_000_000;
-const COST_OUT = 0.6  / 1_000_000;
+const MODEL = 'mistral-small-latest';
 
 // --- Helper réseau ---
 
@@ -19,7 +18,7 @@ function fetchWithTimeout(url, options, timeoutMs = 30_000) {
     .finally(() => clearTimeout(timer));
 }
 
-// --- Embedding (Phase 12 : wrappé withRetry + breaker) ---
+// --- Embedding ---
 
 async function embedText(text) {
   return mistralBreaker.call(() => withRetry(async () => {
@@ -64,7 +63,7 @@ export async function retrieveContext(query, topK = 5, threshold = 0.5) {
     }));
 }
 
-// --- Phase 5 (J4) + Phase 12 (J5) : generateCompletion robustifiée ---
+// --- generateCompletion ---
 
 async function generateCompletion(question, context, { temperature = 0.1 } = {}) {
   const contextText = context
@@ -84,7 +83,6 @@ ${contextText}
 
 Question : ${question}`;
 
-  // Phase 12 : circuit breaker + retry exponentiel
   return mistralBreaker.call(() => withRetry(async () => {
     const response = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
       method: 'POST',
@@ -93,12 +91,13 @@ Question : ${question}`;
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'mistral-small-latest',
+        model: MODEL,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user',   content: userMessage  },
         ],
         temperature,
+        max_tokens: 500, // J5 : garde-fou anti-réponse infinie
       }),
     });
 
@@ -139,7 +138,7 @@ function detectOrphanCitations(answer, numSources) {
   return orphans;
 }
 
-// --- Phase 6 + 7 + 11 : ragQuery ---
+// --- ragQuery ---
 
 export async function ragQuery(question, options = {}) {
   const { topK = 5, threshold = 0.5, temperature = 0.1, verbose = false } = options;
@@ -154,13 +153,6 @@ export async function ragQuery(question, options = {}) {
   const avgScore = chunks.length
     ? chunks.reduce((s, c) => s + c.score, 0) / chunks.length
     : 0;
-
-  if (verbose) {
-    console.log(
-      `[retrieve] topK=${chunks.length} retournés en ${retrievalMs}ms, ` +
-      `top score ${topScore.toFixed(2)}, avg score ${avgScore.toFixed(2)}`
-    );
-  }
 
   if (chunks.length === 0) {
     return {
@@ -183,14 +175,10 @@ export async function ragQuery(question, options = {}) {
 
   const promptTokens     = usage.prompt_tokens     ?? 0;
   const completionTokens = usage.completion_tokens ?? 0;
-  const costUSD = promptTokens * COST_IN + completionTokens * COST_OUT;
 
-  if (verbose) {
-    console.log(
-      `[generate] ${promptTokens} tok in / ${completionTokens} tok out, ` +
-      `${generationMs}ms, $${costUSD.toFixed(6)}`
-    );
-  }
+  // Phase 13 : cost tracker centralisé + log session
+  const cost = trackCost(promptTokens, completionTokens, MODEL);
+  if (verbose) logCostStats(cost);
 
   const sources         = formatSources(chunks);
   const orphanCitations = detectOrphanCitations(answer, chunks.length);
@@ -207,7 +195,7 @@ export async function ragQuery(question, options = {}) {
       generationMs,
       promptTokens,
       completionTokens,
-      costUSD: parseFloat(costUSD.toFixed(6)),
+      costUSD: cost.costUSD,
       orphanCitations,
     },
   };
