@@ -1,14 +1,21 @@
-// Phases 4-7 : Retrieval + Generation + Pipeline RAG + Citations structurées
+// Phases 4-7 + 11 (J4) : Retrieval + Generation + Citations + paramètres configurables
+// Phase 12 (J5) : embedText et generateCompletion passent par withRetry + circuit breaker
+// Phase 13 (J5) : cost tracking centralisé via lib/cost-tracker.js
+// Phase 14 (J5) : computeConfidence(matches) + CONFIDENCE_THRESHOLD env (défaut 0.75)
+// Phase 15 (J5) : court-circuit "Je ne sais pas" AVANT l'appel LLM si !confidence.sufficient
 import { Pinecone } from '@pinecone-database/pinecone';
+import { withRetry, mistralBreaker } from './lib/resilience.js';
+import { trackCost, logCostStats } from './lib/cost-tracker.js';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+const MODEL = 'mistral-small-latest';
 
-// $0.2/1M tokens in, $0.6/1M tokens out — mistral-small-latest
-const COST_IN  = 0.2  / 1_000_000;
-const COST_OUT = 0.6  / 1_000_000;
+// Phase 15 : message standardisé exact (cf. spec J5 phase 4)
+const NO_ANSWER_MESSAGE =
+  "Je ne dispose pas d'informations suffisantes dans les documents fournis pour répondre à cette question.";
 
-// --- Embedding ---
+// --- Helper réseau ---
 
 function fetchWithTimeout(url, options, timeoutMs = 30_000) {
   const controller = new AbortController();
@@ -17,22 +24,28 @@ function fetchWithTimeout(url, options, timeoutMs = 30_000) {
     .finally(() => clearTimeout(timer));
 }
 
+// --- Embedding ---
+
 async function embedText(text) {
-  const response = await fetchWithTimeout('https://api.mistral.ai/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model: 'mistral-embed', input: [text] }),
-  });
-  if (!response.ok) throw new Error(`Embedding error ${response.status}`);
-  const data = await response.json();
-  return data.data[0].embedding;
+  return mistralBreaker.call(() => withRetry(async () => {
+    const response = await fetchWithTimeout('https://api.mistral.ai/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'mistral-embed', input: [text] }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Mistral embeddings error ${response.status}: ${err}`);
+    }
+    const data = await response.json();
+    return data.data[0].embedding;
+  }));
 }
 
 // --- Phase 4 : retrieveContext ---
-// threshold rendu paramétrable en Phase 11 (défaut 0.5 = comportement original)
 
 export async function retrieveContext(query, topK = 5, threshold = 0.5) {
   if (!query || !query.trim()) return [];
@@ -56,56 +69,73 @@ export async function retrieveContext(query, topK = 5, threshold = 0.5) {
     }));
 }
 
-// --- Phase 5 : generateCompletion ---
-// temperature rendue paramétrable en Phase 11 (défaut 0.1 = comportement original)
+// --- Phase 14 : computeConfidence ---
+
+export function computeConfidence(matches) {
+  if (!matches || matches.length === 0) {
+    return { topScore: 0, avgScore: 0, sufficient: false };
+  }
+  const scores = matches.map(m => m.score ?? 0).filter(Number.isFinite);
+  const topScore = scores[0] ?? 0;
+  const avgScore = scores.length
+    ? scores.reduce((a, b) => a + b, 0) / scores.length
+    : 0;
+
+  const threshold = parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.75');
+  return { topScore, avgScore, sufficient: topScore >= threshold };
+}
+
+// --- generateCompletion ---
 
 async function generateCompletion(question, context, { temperature = 0.1 } = {}) {
   const contextText = context
     .map((c, i) => `[Source ${i + 1} - ${c.source}]\n${c.text}`)
     .join('\n\n---\n\n');
 
-  const systemPrompt = `Tu es un assistant expert qui répond uniquement à partir des sources fournies.
-
-Règles :
-- Réponds uniquement à partir du contexte ci-dessous. N'utilise pas ta mémoire interne.
-- Si la réponse n'est pas dans le contexte, dis explicitement "Je ne trouve pas cette information dans les documents fournis."
-- Cite toujours tes sources entre crochets : [Source 1], [Source 2], etc.
-- Sois précis et concis.`;
+  const systemPrompt = `Tu es un assistant documentaire. Règles absolues :
+1. Réponds UNIQUEMENT à partir du contexte fourni.
+2. Si le contexte ne contient pas suffisamment d'informations pour répondre, réponds exactement :
+"${NO_ANSWER_MESSAGE}"
+3. Ne complète JAMAIS avec tes connaissances générales.
+4. Cite tes sources entre crochets : [Source 1], [Source 2], etc.`;
 
   const userMessage = `Contexte :
 ${contextText}
 
 Question : ${question}`;
 
-  const response = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'mistral-small-latest',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userMessage  },
-      ],
-      temperature,
-    }),
-  });
+  return mistralBreaker.call(() => withRetry(async () => {
+    const response = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage  },
+        ],
+        temperature,
+        max_tokens: 500,
+      }),
+    });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Mistral completion error ${response.status}: ${err}`);
-  }
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Mistral completion error ${response.status}: ${err}`);
+    }
 
-  const data = await response.json();
-  return {
-    content: data.choices[0].message.content,
-    usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
-  };
+    const data = await response.json();
+    return {
+      content: data.choices[0].message.content,
+      usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
+    };
+  }));
 }
 
-// --- Phase 7 : formatage des sources (dédupliquées par fichier) ---
+// --- Phase 7 : formatage des sources ---
 
 function formatSources(chunks) {
   const best = new Map();
@@ -129,49 +159,54 @@ function detectOrphanCitations(answer, numSources) {
   return orphans;
 }
 
-// --- Phase 6 : ragQuery — pipeline complète + observability ---
-// Phase 11 : ajout des options threshold et temperature
+// --- Helper : réponse "je ne sais pas" sans appel LLM ---
+
+function noAnswerResponse(confidence, retrievalMs) {
+  return {
+    answer: NO_ANSWER_MESSAGE,
+    sources: [],
+    chunks: [],
+    chunksUsed: 0,
+    confidence,
+    metrics: {
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
+      retrievalMs,
+      generationMs: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      costUSD: 0,
+      orphanCitations: [],
+    },
+  };
+}
+
+// --- ragQuery ---
 
 export async function ragQuery(question, options = {}) {
   const { topK = 5, threshold = 0.5, temperature = 0.1, verbose = false } = options;
 
   if (verbose) console.log(`[ragQuery] question="${question.slice(0, 70)}"`);
 
-  // RETRIEVE
   const t0 = Date.now();
   const chunks = await retrieveContext(question, topK, threshold);
   const retrievalMs = Date.now() - t0;
 
-  const topScore = chunks[0]?.score ?? 0;
-  const avgScore = chunks.length
-    ? chunks.reduce((s, c) => s + c.score, 0) / chunks.length
-    : 0;
+  const confidence = computeConfidence(chunks);
 
   if (verbose) {
     console.log(
-      `[retrieve] topK=${chunks.length} retournés en ${retrievalMs}ms, ` +
-      `top score ${topScore.toFixed(2)}, avg score ${avgScore.toFixed(2)}`
-    );
-    chunks.forEach(c =>
-      console.log(`  [${c.score.toFixed(2)}] ${c.source}, "${c.text.slice(0, 60)}..."`)
+      `[retrieve] ${chunks.length} chunks en ${retrievalMs}ms · ` +
+      `top=${confidence.topScore.toFixed(2)} · avg=${confidence.avgScore.toFixed(2)} · ` +
+      `sufficient=${confidence.sufficient}`
     );
   }
 
-  // Pas de chunks pertinents → "je ne sais pas" sans appeler le LLM
-  if (chunks.length === 0) {
-    if (verbose) console.log('[generate] aucun chunk pertinent, réponse directe');
-    return {
-      answer: 'Je ne trouve pas cette information dans les documents fournis.',
-      sources: [],
-      chunks: [],
-      chunksUsed: 0,
-      metrics: {
-        topScore: 0, avgScore: 0,
-        retrievalMs, generationMs: 0,
-        promptTokens: 0, completionTokens: 0,
-        costUSD: 0, orphanCitations: [],
-      },
-    };
+  // Phase 15 : court-circuit AVANT le LLM si la confiance n'est pas suffisante.
+  // Aucun appel API → coût $0, économie de tokens garantie.
+  if (!confidence.sufficient) {
+    if (verbose) console.log('[ragQuery] confidence insuffisante → "je ne sais pas" (pas d\'appel LLM)');
+    return noAnswerResponse(confidence, retrievalMs);
   }
 
   // GENERATE
@@ -181,33 +216,27 @@ export async function ragQuery(question, options = {}) {
 
   const promptTokens     = usage.prompt_tokens     ?? 0;
   const completionTokens = usage.completion_tokens ?? 0;
-  const costUSD = promptTokens * COST_IN + completionTokens * COST_OUT;
 
-  if (verbose) {
-    console.log(
-      `[generate] mistral-small-latest, ${promptTokens} tokens in / ` +
-      `${completionTokens} tokens out, ${generationMs}ms, $${costUSD.toFixed(6)}`
-    );
-    console.log(`[ragQuery] total ${retrievalMs + generationMs}ms`);
-  }
+  const cost = trackCost(promptTokens, completionTokens, MODEL);
+  if (verbose) logCostStats(cost);
 
-  // Phase 7 — sources structurées + détection de citations orphelines
-  const sources          = formatSources(chunks);
-  const orphanCitations  = detectOrphanCitations(answer, chunks.length);
+  const sources         = formatSources(chunks);
+  const orphanCitations = detectOrphanCitations(answer, chunks.length);
 
   return {
     answer,
     sources,
     chunks,
     chunksUsed: chunks.length,
+    confidence,
     metrics: {
-      topScore,
-      avgScore,
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
       retrievalMs,
       generationMs,
       promptTokens,
       completionTokens,
-      costUSD: parseFloat(costUSD.toFixed(6)),
+      costUSD: cost.costUSD,
       orphanCitations,
     },
   };
