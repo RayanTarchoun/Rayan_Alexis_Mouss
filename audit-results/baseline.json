@@ -1,0 +1,450 @@
+{
+  "variant": "baseline",
+  "config": {
+    "mode": "online",
+    "topK": 5,
+    "threshold": 0.5,
+    "temperature": 0.1
+  },
+  "timestamp": "2026-05-07T09:10:06.120Z",
+  "results": [
+    {
+      "questionId": 1,
+      "category": "happy",
+      "question": "Comment définir un outil dans Pydantic AI ?",
+      "answer": "Pour définir un outil dans Pydantic AI, vous pouvez utiliser l'une des méthodes suivantes :\n\n1. **Passer une liste de fonctions directement au constructeur de l'agent** :\n   - La signature de la fonction est inspectée pour déterminer si l'outil prend un `RunContext`.\n   - Exemple :\n     ```python\n     from pydantic_ai import Agent\n\n     def roll_dice() -> str:\n         \"\"\"Roll a six-sided die and return the result.\"\"\"\n         import random\n         return str(random.randint(1, 6))\n\n     def get_player_name(ctx: RunContext[str]) -> str:\n         \"\"\"Get the player's name.\"\"\"\n         return ctx.deps\n\n     agent = Agent(\n         'google-gla:gemini-3-flash-preview',\n         deps_type=str,\n         tools=[roll_dice, get_player_name],\n     )\n     ```\n     [Source 4]\n\n2. **Utiliser la classe `Tool` pour un contrôle plus fin** :\n   - Vous pouvez définir des outils avec des noms, descriptions ou méthodes personnalisées.\n   - Exemple :\n     ```python\n     from pydantic_ai import Agent, Tool\n\n     agent = Agent(\n         'google-gla:gemini-3-flash-preview',\n         tools=[\n             Tool(roll_dice, takes_ctx=False),\n             Tool(get_player_name, takes_ctx=True),\n         ],\n     )\n     ```\n     [Source 4]\n\n3. **Utiliser des décorateurs pour des outils avancés** :\n   - Vous pouvez utiliser `@agent.tool_plain` pour configurer des outils avec des paramètres comme `docstring_format` ou `require_parameter_descriptions`.\n   - Exemple :\n     ```python\n     @agent.tool_plain(docstring_format='google', require_parameter_descriptions=True)\n     def foobar(a: int, b: str, c: dict[str, list[float]]) -> str:\n         ...\n     ```\n     [Source 4]\n\nLes outils peuvent retourner n'importe quel type de données sérialisable en JSON par Pydantic. Pour des fonctionnalités avancées (contenu multi-modal, métadonnées), consultez la documentation dédiée. [Source 4]",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_api_tools.md",
+          "relevance": 0.803662717
+        },
+        {
+          "index": 2,
+          "file": "ne_docs_toolsets.md",
+          "relevance": 0.799439549
+        },
+        {
+          "index": 3,
+          "file": "api_tools.md",
+          "relevance": 0.797191
+        },
+        {
+          "index": 4,
+          "file": "ne_docs_tools.md",
+          "relevance": 0.796810865
+        },
+        {
+          "index": 5,
+          "file": "toolsets.md",
+          "relevance": 0.795837522
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.803662717,
+        "avgScore": 0.7985883306,
+        "retrievalMs": 1647,
+        "generationMs": 4646,
+        "promptTokens": 1607,
+        "completionTokens": 460,
+        "costUSD": 0.000597,
+        "orphanCitations": [],
+        "totalMs": 6294
+      }
+    },
+    {
+      "questionId": 2,
+      "category": "happy",
+      "question": "Quelle est la différence entre Agent et RunContext ?",
+      "answer": "Je ne trouve pas cette information dans les documents fournis.",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_durable_execution_temporal.md",
+          "relevance": 0.776322365
+        },
+        {
+          "index": 2,
+          "file": "durable_execution_temporal.md",
+          "relevance": 0.775905788
+        },
+        {
+          "index": 3,
+          "file": "ne_docs_durable_execution_prefect.md",
+          "relevance": 0.774590194
+        },
+        {
+          "index": 4,
+          "file": "agent.md",
+          "relevance": 0.773281336
+        },
+        {
+          "index": 5,
+          "file": "ne_docs_agent.md",
+          "relevance": 0.773078322
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": true,
+      "metrics": {
+        "topScore": 0.776322365,
+        "avgScore": 0.774635601,
+        "retrievalMs": 806,
+        "generationMs": 1033,
+        "promptTokens": 3919,
+        "completionTokens": 13,
+        "costUSD": 0.000792,
+        "orphanCitations": [],
+        "totalMs": 1839
+      }
+    },
+    {
+      "questionId": 3,
+      "category": "happy",
+      "question": "Comment streamer une réponse avec Pydantic AI ?",
+      "answer": "Pour streamer une réponse avec Pydantic AI, tu peux utiliser l'une des méthodes suivantes selon tes besoins :\n\n### 1. **Streaming des réponses structurées (exemple avec `UserProfile`)**\n```python\nfrom datetime import date\nfrom typing_extensions import TypedDict\nfrom pydantic_ai import Agent\n\nclass UserProfile(TypedDict, total=False):\n    name: str\n    dob: date\n    bio: str\n\nagent = Agent('openai:gpt-5.2', output_type=UserProfile)\n\nasync def main():\n    user_input = 'My name is Ben, I was born on January 28th 1990, I like the chain the dog and the pyramid.'\n    async with agent.run_stream(user_input) as result:\n        async for profile in result.stream_output():\n            print(profile)\n```\n**Explication** :\n- `stream_output()` permet de récupérer des données partielles au fur et à mesure qu'elles sont générées.\n- Les données sont validées avec `allow_partial=True` par défaut pour les champs optionnels (`total=False` dans `TypedDict`). [Source 4]\n\n---\n\n### 2. **Streaming des réponses brutes (ModelResponse)**\n```python\nfrom pydantic import ValidationError\nfrom pydantic_ai import Agent\n\nagent = Agent('openai:gpt-5.2')\n\nasync def main():\n    user_input = 'Tell me about Ben.'\n    async with agent.run_stream(user_input) as result:\n        async for message, last in result.stream_responses(debounce_by=0.01):\n            try:\n                profile = await result.validate_response_output(\n                    message,\n                    allow_partial=not last,  # Valide partiellement sauf pour le dernier message\n                )\n            except ValidationError:\n                continue\n            print(profile)\n```\n**Explication** :\n- `stream_responses()` retourne des objets `ModelResponse` partiels.\n- `validate_response_output()` valide les données partielles avec `allow_partial=True` (sauf pour le dernier message). [Source 1, Source 2, Source 5]\n\n---\n\n### 3. **Streaming du texte seul**\n```python\nasync def main():\n    user_input = 'Tell me a joke.'\n    async with agent.run_stream(user_input) as result:\n        async for message in result.stream_text(delta=True):\n            print(message)\n```\n**Explication** :\n- `stream_text(delta=True)` retourne le texte au fur et à mesure qu'il est généré.\n- **Attention** : Le message final n'est pas inclus dans l'historique des messages. [Source 4]\n\n---\n\n### Points clés :\n- **`stream_output()`** : Pour des données structurées (meilleure option si tu as un `output_type`).\n- **`stream_responses()` + `validate_response_output()`** : Pour un contrôle fin sur la validation.\n- **`stream_text()`** : Pour du texte brut uniquement.\n\n[Source 1], [Source 2], [Source 4], [Source 5]",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_output.md",
+          "relevance": 0.823257327
+        },
+        {
+          "index": 3,
+          "file": "ne_docs_message-history.md",
+          "relevance": 0.820457
+        },
+        {
+          "index": 5,
+          "file": "output.md",
+          "relevance": 0.815080404
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.823257327,
+        "avgScore": 0.8203137433999999,
+        "retrievalMs": 348,
+        "generationMs": 4362,
+        "promptTokens": 2715,
+        "completionTokens": 655,
+        "costUSD": 0.000936,
+        "orphanCitations": [],
+        "totalMs": 4710
+      }
+    },
+    {
+      "questionId": 4,
+      "category": "happy",
+      "question": "Comment déclarer des dépendances dans un agent Pydantic AI ?",
+      "answer": "Pour déclarer des dépendances dans un agent Pydantic AI, il faut suivre ces étapes :\n\n1. **Définir une classe de dépendances** (généralement une dataclass) qui contient les objets ou services nécessaires à l'agent.\n2. **Passer cette classe au constructeur de l'agent** via le paramètre `deps_type`.\n3. **Passer une instance de cette classe** lors de l'exécution de l'agent via le paramètre `deps`.\n\n### Exemple de déclaration de dépendances :\n```python\nfrom dataclasses import dataclass\nimport httpx\nfrom pydantic_ai import Agent\n\n@dataclass\nclass MyDeps:\n    api_key: str\n    http_client: httpx.AsyncClient\n\nagent = Agent(\n    'openai:gpt-5.2',\n    deps_type=MyDeps,  # Déclaration du type de dépendances\n)\n```\n\n### Utilisation des dépendances :\nLes dépendances sont accessibles via le `RunContext` dans les fonctions comme les *system prompts*, les *tools* ou les *validateurs de sortie*.\n\n```python\n@agent.system_prompt\nasync def get_system_prompt(ctx: RunContext[MyDeps]) -> str:\n    response = await ctx.deps.http_client.get(\n        'https://example.com',\n        headers={'Authorization': f'Bearer {ctx.deps.api_key}'},\n    )\n    response.raise_for_status()\n    return f'Prompt: {response.text}'\n```\n\n### Exécution avec les dépendances :\n```python\nasync def main():\n    async with httpx.AsyncClient() as client:\n        deps = MyDeps('foobar', client)  # Instance des dépendances\n        result = await agent.run('Tell me a joke.', deps=deps)\n        print(result.output)\n```\n\n[Source 1], [Source 4], [Source 5]",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_dependencies.md",
+          "relevance": 0.848831415
+        },
+        {
+          "index": 3,
+          "file": "dependencies.md",
+          "relevance": 0.827153862
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.848831415,
+        "avgScore": 0.830143559,
+        "retrievalMs": 896,
+        "generationMs": 2585,
+        "promptTokens": 4310,
+        "completionTokens": 413,
+        "costUSD": 0.00111,
+        "orphanCitations": [],
+        "totalMs": 3481
+      }
+    },
+    {
+      "questionId": 5,
+      "category": "happy",
+      "question": "Quels modèles LLM sont supportés par Pydantic AI ?",
+      "answer": "Je ne trouve pas cette information dans les documents fournis.",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_models_openai.md",
+          "relevance": 0.804065
+        },
+        {
+          "index": 3,
+          "file": "models_openai.md",
+          "relevance": 0.799115479
+        },
+        {
+          "index": 4,
+          "file": "ne_docs_models_overview.md",
+          "relevance": 0.799092114
+        },
+        {
+          "index": 5,
+          "file": "ne_docs_evals_evaluators_llm-judge.md",
+          "relevance": 0.798911333
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": true,
+      "metrics": {
+        "topScore": 0.804065,
+        "avgScore": 0.8005175374,
+        "retrievalMs": 340,
+        "generationMs": 476,
+        "promptTokens": 5138,
+        "completionTokens": 13,
+        "costUSD": 0.001035,
+        "orphanCitations": [],
+        "totalMs": 817
+      }
+    },
+    {
+      "questionId": 6,
+      "category": "happy",
+      "question": "Comment gérer l'historique des messages dans Pydantic AI ?",
+      "answer": "Pour gérer l'historique des messages dans Pydantic AI, voici les méthodes principales :\n\n1. **Accéder aux messages après un run** :\n   - Utilisez `result.all_messages()` pour obtenir **tous les messages** (y compris ceux des runs précédents).\n   - Utilisez `result.new_messages()` pour obtenir **uniquement les messages du run actuel**.\n   - Des variantes en JSON (`all_messages_json()` et `new_messages_json()`) sont aussi disponibles. [Source 1, Source 4]\n\n2. **Utiliser l'historique pour de nouveaux runs** :\n   - Passez l'historique des messages au paramètre `message_history` des méthodes `Agent.run`, `Agent.run_sync` ou `Agent.run_stream`.\n   - **Attention** : Si `message_history` est fourni et non vide, **aucun nouveau système prompt n'est généré** (on suppose que l'historique inclut déjà un système prompt). [Source 2, Source 4]\n\n3. **Modifier l'historique avant envoi** :\n   - Utilisez le paramètre `history_processors` sur l'`Agent` pour intercepter et modifier l'historique avant chaque requête.\n   - **Attention** : Les processeurs remplacent l'historique dans l'état, y compris le nouveau message utilisateur. Faites une copie si nécessaire. [Source 5]\n\nExemple d'utilisation :\n```python\nfrom pydantic_ai import Agent\n\nagent = Agent('openai:gpt-5.2', instructions='Be a helpful assistant.')\n\n# Premier run\nresult = agent.run_sync('Tell me a joke.')\nmessages = result.all_messages()  # Récupère l'historique complet\n\n# Deuxième run avec l'historique\nresult2 = agent.run_sync('Explain?', message_history=messages)\n``` [Source 1, Source 2]",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_message-history.md",
+          "relevance": 0.828000069
+        },
+        {
+          "index": 3,
+          "file": "message-history.md",
+          "relevance": 0.818530858
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.828000069,
+        "avgScore": 0.8203549746000001,
+        "retrievalMs": 5550,
+        "generationMs": 3048,
+        "promptTokens": 2878,
+        "completionTokens": 405,
+        "costUSD": 0.000819,
+        "orphanCitations": [],
+        "totalMs": 8598
+      }
+    },
+    {
+      "questionId": 7,
+      "category": "ambiguous",
+      "question": "Comment gérer les erreurs dans Pydantic AI ?",
+      "answer": "Pour gérer les erreurs dans Pydantic AI, voici les approches documentées :\n\n1. **Gestion des erreurs courantes** :\n   - Pour les erreurs liées à la configuration des clés API (ex: `UserError: API key must be provided...`), consultez la page [Models](models/overview.md) pour apprendre à configurer les variables d'environnement ou passer la clé API directement via l'argument `api_key` [Source 1, Source 2].\n\n2. **Gestion des erreurs dans les notebooks (Jupyter/Colab)** :\n   - **Environnements modernes (Jupyter/IPython 7.0+)** : Utilisez directement `await agent.run()` sans configuration supplémentaire [Source 1, Source 2].\n   - **Environnements hérités** : Utilisez `nest-asyncio` pour résoudre les conflits de boucle d'événements :\n     ```python\n     import nest_asyncio\n     nest_asyncio.apply()\n     result = agent.run_sync('votre_question')\n     ```\n     Cette solution s'applique aussi à Google Colab et Marimo [Source 1, Source 2].\n\n3. **Gestion des erreurs avec `FallbackModel`** :\n   - Pour les erreurs liées aux modèles (ex: échec d'un modèle), utilisez `FallbackModel` pour basculer automatiquement vers un autre modèle. Vous pouvez capturer les exceptions avec `FallbackExceptionGroup` :\n     ```python\n     from pydantic_ai import Agent, FallbackExceptionGroup\n     from pydantic_ai.models.fallback import FallbackModel\n\n     agent = Agent(FallbackModel('openai:gpt-5-mini', 'anthropic:claude-sonnet-4-6'))\n     try:\n         response = agent.run_sync('votre_question')\n     except FallbackExceptionGroup as exc_group:\n         print(f\"Tous les {len(exc_group.exceptions)} modèles ont échoué :\")\n         for exc in exc_group.exceptions:\n             print(f\"  - {exc}\")\n     ```\n     [Source 4, Source 5].\n\n4. **Désactiver les relances automatiques des SDK** :\n   - Pour éviter des délais dans le basculement, désactivez les relances des SDK (ex: OpenAI) en configurant `max_retries=0` sur un client personnalisé [Source 5].\n\n5. **Surveillance des requêtes HTTPX** :\n   - Utilisez des clients `httpx` personnalisés ou l'intégration `logfire` pour surveiller les requêtes/réponses en temps réel [Source 1].\n\nSi l'erreur spécifique n'est pas listée ci-dessus, consultez la [documentation officielle](https://github.com/pydantic/pydantic-ai/issues) ou demandez de l'aide sur le [Slack Pydantic](help.md) [Source 1, Source 2].",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_troubleshooting.md",
+          "relevance": 0.833330154
+        },
+        {
+          "index": 2,
+          "file": "troubleshooting.md",
+          "relevance": 0.81147939
+        },
+        {
+          "index": 3,
+          "file": "ne_docs_api_exceptions.md",
+          "relevance": 0.809677064
+        },
+        {
+          "index": 4,
+          "file": "ne_docs_models_overview.md",
+          "relevance": 0.808398247
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.833330154,
+        "avgScore": 0.8136042476,
+        "retrievalMs": 439,
+        "generationMs": 3859,
+        "promptTokens": 2102,
+        "completionTokens": 625,
+        "costUSD": 0.000795,
+        "orphanCitations": [],
+        "totalMs": 4298
+      }
+    },
+    {
+      "questionId": 8,
+      "category": "ambiguous",
+      "question": "Comment tester un agent Pydantic AI ?",
+      "answer": "Pour tester un agent Pydantic AI, vous pouvez utiliser plusieurs approches selon vos besoins. Voici les méthodes recommandées basées sur les documents fournis :\n\n### 1. **Tests unitaires avec `TestModel`**\n`TestModel` est un modèle utilitaire conçu pour tester rapidement les applications Pydantic AI sans faire d'appels réels à des modèles de langage (LLM). Il génère des données valides pour les outils et les types de sortie structurés.\n\n**Exemple :**\n```python\nfrom pydantic_ai import Agent\nfrom pydantic_ai.models.test import TestModel\n\nmy_agent = Agent('openai:gpt-5.2', instructions='...')\n\nasync def test_my_agent():\n    \"\"\"Test unitaire pour mon agent, à exécuter avec pytest.\"\"\"\n    m = TestModel()\n    with my_agent.override(model=m):\n        result = await my_agent.run('Testing my agent...')\n        assert result.output == 'success (no tool calls)'\n    assert m.last_model_request_parameters.function_tools == []\n```\n[Source 5]\n\n**Cas d'usage :**\n- Tester la logique métier sans dépendre des LLM.\n- Valider les appels d'outils et les types de sortie.\n- Exécuter des tests rapidement pendant le développement.\n\n---\n\n### 2. **Tests unitaires avec `FunctionModel`**\nSi vous avez besoin de plus de contrôle sur les données générées, utilisez `FunctionModel` pour écrire votre propre logique de génération de données.\n\n**Exemple :**\n```python\nfrom pydantic_ai.models.function import FunctionModel\n\ndef custom_data_generator():\n    # Logique personnalisée pour générer des données de test\n    return {\"output\": \"valeur_attendue\"}\n\nm = FunctionModel(custom_data_generator)\n```\n*(Non détaillé dans les sources, mais mentionné comme alternative à `TestModel`.)*\n\n---\n\n### 3. **Tests avec `pytest` et outils complémentaires**\n- Utilisez [`pytest`](https://docs.pytest.org/) comme framework de test.\n- Pour des assertions complexes, utilisez :\n  - [`inline-snapshot`](https://15r10nk.github.io/inline-snapshot/latest/) pour des snapshots de données.\n  - [`dirty-equals`](https://dirty-equals.helpmanual.io/latest/) pour comparer des structures de données.\n- Désactivez les appels aux modèles avec `ALLOW_MODEL_REQUESTS=False` pour éviter les appels accidentels.\n\n**Exemple :**\n```python\nimport pytest\nfrom pydantic_ai import Agent\nfrom pydantic_ai.models.test import TestModel\n\n@pytest.mark.asyncio\nasync def test_agent_with_tools():\n    agent = Agent('openai:gpt-5.2', deps_type=DatabaseConn, output_type=ChatResult)\n    m = TestModel()\n    with agent.override(model=m):\n        result = await agent.run('Envoyer un message à John Doe')\n        assert isinstance(result.output, ChatResult)\n```\n[Source 2]\n\n---\n\n### 4. **Tests avec `Agent.override`**\nRemplacez le modèle, les dépendances ou les outils d'un agent dans vos tests pour isoler des composants spécifiques.\n\n**Exemple :**\n```python\nagent = Agent('openai:gpt-5.2', deps_type=WeatherService)\n\n# Remplacer le modèle par TestModel\nm = TestModel()\nwith agent.override(model=m):\n    result = await agent.run('Vérifier la météo à Paris')\n```\n[Source 2]\n\n---\n\n### 5. **Tests systématiques avec Pydantic Evals**\nPour des évaluations approfondies, utilisez [Pydantic Evals](evals.md) pour créer des jeux de tests structurés et automatisés.\n\n**Exemple :**\n```python\nfrom pydantic_evals import Case, Dataset\n\ndataset = Dataset([\n    Case(input=\"Demander un café à John Doe\", expected_output=\"message_valide\"),\n    # Ajoutez d'autres cas de test\n])\n```\n*(Non détaillé dans les sources, mais mentionné comme outil pour des évaluations systématiques.)*\n\n---\n\n### Bonnes pratiques\n1. **Isoler les dépendances** : Utilisez des dépendances factices (mock) pour éviter les appels externes.\n2. **Valider les types de sortie** : Assurez-vous que les types de sortie (`output_type`) sont correctement validés.\n3. **Tester les erreurs** : Simulez des erreurs (ex. `ModelRetry`) pour valider les mécanismes de récupération.\n4. **Surveillance en production** : Utilisez [Pydantic Logfire](https://logfire.pydantic.dev/docs/) pour tracer les exécutions en production et identifier les problèmes.\n\n---\n**Sources :**\n- [Source 2 - ne_docs_testing.md] pour les tests unitaires.\n- [Source 5 - ne_docs_api_models_test.md] pour `TestModel`.\n- [Source 1 - agent.md] et [Source 3 - ne_docs_agent.md] pour les exemples d'agents.",
+      "sources": [
+        {
+          "index": 1,
+          "file": "agent.md",
+          "relevance": 0.808320403
+        },
+        {
+          "index": 2,
+          "file": "ne_docs_testing.md",
+          "relevance": 0.804550231
+        },
+        {
+          "index": 3,
+          "file": "ne_docs_agent.md",
+          "relevance": 0.804027736
+        },
+        {
+          "index": 5,
+          "file": "ne_docs_api_models_test.md",
+          "relevance": 0.797777295
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": false,
+      "metrics": {
+        "topScore": 0.808320403,
+        "avgScore": 0.8024943232,
+        "retrievalMs": 667,
+        "generationMs": 6911,
+        "promptTokens": 3652,
+        "completionTokens": 1086,
+        "costUSD": 0.001382,
+        "orphanCitations": [],
+        "totalMs": 7578
+      }
+    },
+    {
+      "questionId": 9,
+      "category": "adversarial",
+      "question": "Quel est le PIB de la France en 2023 ?",
+      "answer": "Je ne trouve pas cette information dans les documents fournis.",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_models_anthropic.md",
+          "relevance": 0.749820173
+        },
+        {
+          "index": 2,
+          "file": "ne_docs_direct.md",
+          "relevance": 0.738801718
+        },
+        {
+          "index": 3,
+          "file": "agent.md",
+          "relevance": 0.733227372
+        },
+        {
+          "index": 4,
+          "file": "models_anthropic.md",
+          "relevance": 0.730887532
+        },
+        {
+          "index": 5,
+          "file": "evals_how-to_dataset-management.md",
+          "relevance": 0.728650272
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": true,
+      "metrics": {
+        "topScore": 0.749820173,
+        "avgScore": 0.7362774134000001,
+        "retrievalMs": 683,
+        "generationMs": 541,
+        "promptTokens": 2778,
+        "completionTokens": 13,
+        "costUSD": 0.000563,
+        "orphanCitations": [],
+        "totalMs": 1224
+      }
+    },
+    {
+      "questionId": 10,
+      "category": "adversarial",
+      "question": "Qui a gagné la Coupe du Monde de football en 2022 ?",
+      "answer": "Je ne trouve pas cette information dans les documents fournis.",
+      "sources": [
+        {
+          "index": 1,
+          "file": "ne_docs_models_anthropic.md",
+          "relevance": 0.732692659
+        },
+        {
+          "index": 2,
+          "file": "models_anthropic.md",
+          "relevance": 0.711114466
+        },
+        {
+          "index": 3,
+          "file": "evals_how-to_dataset-management.md",
+          "relevance": 0.708260834
+        },
+        {
+          "index": 4,
+          "file": "ne_docs_models_openai.md",
+          "relevance": 0.708247781
+        },
+        {
+          "index": 5,
+          "file": "ne_docs_evals_how-to_dataset-management.md",
+          "relevance": 0.707341671
+        }
+      ],
+      "chunksUsed": 5,
+      "isNoAnswer": true,
+      "metrics": {
+        "topScore": 0.732692659,
+        "avgScore": 0.7135314822,
+        "retrievalMs": 353,
+        "generationMs": 675,
+        "promptTokens": 3306,
+        "completionTokens": 13,
+        "costUSD": 0.000669,
+        "orphanCitations": [],
+        "totalMs": 1028
+      }
+    }
+  ],
+  "aggregates": {
+    "totalQuestions": 10,
+    "successful": 10,
+    "failed": 0,
+    "avgTopScore": 0.8008302281999999,
+    "avgScore": 0.79104612124,
+    "avgRetrievalMs": 1172.9,
+    "avgGenerationMs": 2813.6,
+    "avgTotalMs": 3986.7,
+    "totalPromptTokens": 32405,
+    "totalCompletionTokens": 3696,
+    "totalCostUSD": 0.008698,
+    "noAnswerCount": 4,
+    "orphanCitationsCount": 0,
+    "runDurationMs": 39877,
+    "byCategory": {
+      "happy": {
+        "count": 6,
+        "avgTopScore": 0.8140231488333333,
+        "noAnswerCount": 2
+      },
+      "ambiguous": {
+        "count": 2,
+        "avgTopScore": 0.8208252785,
+        "noAnswerCount": 0
+      },
+      "adversarial": {
+        "count": 2,
+        "avgTopScore": 0.741256416,
+        "noAnswerCount": 2
+      }
+    }
+  }
+}
