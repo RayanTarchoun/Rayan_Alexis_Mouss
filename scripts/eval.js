@@ -21,7 +21,7 @@ async function runEval() {
     process.stdout.write(`[${i + 1}/${questions.length}] ${q.slice(0, 60)}... `);
 
     try {
-      const r = await ragQuery(q, { topK: 5, verbose: false });
+      const r = await ragQuery(q, { verbose: false });
       results.push({ question: q, ...r });
       console.log(
         `✓ top=${r.metrics.topScore.toFixed(2)} avg=${r.metrics.avgScore.toFixed(2)} ` +

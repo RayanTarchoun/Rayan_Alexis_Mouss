@@ -184,7 +184,7 @@ function noAnswerResponse(confidence, retrievalMs) {
 // --- ragQuery ---
 
 export async function ragQuery(question, options = {}) {
-  const { topK = 10, threshold = 0.5, temperature = 0.1, verbose = false } = options;
+  const { topK = 15, threshold = 0.5, temperature = 0.1, verbose = false } = options;
 
   if (verbose) console.log(`[ragQuery] question="${question.slice(0, 70)}"`);
 

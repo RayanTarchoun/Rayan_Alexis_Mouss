@@ -44,7 +44,7 @@ async function main() {
     console.log('Recherche en cours...');
 
     try {
-      const result = await ragQuery(question, { topK: 5, verbose: false });
+      const result = await ragQuery(question, { verbose: false });
 
       // Phase 16 : passage par formatResponse (footer + note pertinence)
       const formatted = formatResponse(
