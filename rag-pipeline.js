@@ -1,6 +1,7 @@
 // Phases 4-7 + 11 (J4) : Retrieval + Generation + Citations + paramètres configurables
 // Phase 12 (J5) : embedText et generateCompletion passent par withRetry + circuit breaker
-// Phase 13 (J5) : cost tracking centralisé via lib/cost-tracker.js (avec compteur session)
+// Phase 13 (J5) : cost tracking centralisé via lib/cost-tracker.js
+// Phase 14 (J5) : computeConfidence(matches) + CONFIDENCE_THRESHOLD env (défaut 0.75)
 import { Pinecone } from '@pinecone-database/pinecone';
 import { withRetry, mistralBreaker } from './lib/resilience.js';
 import { trackCost, logCostStats } from './lib/cost-tracker.js';
@@ -63,6 +64,32 @@ export async function retrieveContext(query, topK = 5, threshold = 0.5) {
     }));
 }
 
+// --- Phase 14 (J5) : computeConfidence ---
+
+/**
+ * computeConfidence — calcule un score de confiance à partir des chunks retournés.
+ * Le seuil `sufficient` est lu depuis CONFIDENCE_THRESHOLD (.env), défaut 0.75.
+ *
+ * @param {Array} matches — chunks (avec un champ .score) ou matches Pinecone bruts
+ * @returns {{ topScore: number, avgScore: number, sufficient: boolean }}
+ */
+export function computeConfidence(matches) {
+  if (!matches || matches.length === 0) {
+    return { topScore: 0, avgScore: 0, sufficient: false };
+  }
+
+  const scores = matches.map(m => m.score ?? 0).filter(Number.isFinite);
+  const topScore = scores[0] ?? 0;
+  const avgScore = scores.length
+    ? scores.reduce((a, b) => a + b, 0) / scores.length
+    : 0;
+
+  const threshold = parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.75');
+  const sufficient = topScore >= threshold;
+
+  return { topScore, avgScore, sufficient };
+}
+
 // --- generateCompletion ---
 
 async function generateCompletion(question, context, { temperature = 0.1 } = {}) {
@@ -97,7 +124,7 @@ Question : ${question}`;
           { role: 'user',   content: userMessage  },
         ],
         temperature,
-        max_tokens: 500, // J5 : garde-fou anti-réponse infinie
+        max_tokens: 500,
       }),
     });
 
@@ -149,10 +176,16 @@ export async function ragQuery(question, options = {}) {
   const chunks = await retrieveContext(question, topK, threshold);
   const retrievalMs = Date.now() - t0;
 
-  const topScore = chunks[0]?.score ?? 0;
-  const avgScore = chunks.length
-    ? chunks.reduce((s, c) => s + c.score, 0) / chunks.length
-    : 0;
+  // Phase 14 : score de confiance basé sur les chunks récupérés
+  const confidence = computeConfidence(chunks);
+
+  if (verbose) {
+    console.log(
+      `[retrieve] ${chunks.length} chunks en ${retrievalMs}ms · ` +
+      `top=${confidence.topScore.toFixed(2)} · avg=${confidence.avgScore.toFixed(2)} · ` +
+      `sufficient=${confidence.sufficient}`
+    );
+  }
 
   if (chunks.length === 0) {
     return {
@@ -160,6 +193,7 @@ export async function ragQuery(question, options = {}) {
       sources: [],
       chunks: [],
       chunksUsed: 0,
+      confidence,
       metrics: {
         topScore: 0, avgScore: 0,
         retrievalMs, generationMs: 0,
@@ -176,7 +210,6 @@ export async function ragQuery(question, options = {}) {
   const promptTokens     = usage.prompt_tokens     ?? 0;
   const completionTokens = usage.completion_tokens ?? 0;
 
-  // Phase 13 : cost tracker centralisé + log session
   const cost = trackCost(promptTokens, completionTokens, MODEL);
   if (verbose) logCostStats(cost);
 
@@ -188,9 +221,10 @@ export async function ragQuery(question, options = {}) {
     sources,
     chunks,
     chunksUsed: chunks.length,
+    confidence,
     metrics: {
-      topScore,
-      avgScore,
+      topScore: confidence.topScore,
+      avgScore: confidence.avgScore,
       retrievalMs,
       generationMs,
       promptTokens,
