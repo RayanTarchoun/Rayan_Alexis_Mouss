@@ -1,5 +1,7 @@
-// Phases 4-7 : Retrieval + Generation + Pipeline RAG + Citations structurées
+// Phases 4-7 + 11 (J4) : Retrieval + Generation + Citations + paramètres configurables
+// Phase 12 (J5)         : embedText et generateCompletion passent par withRetry + circuit breaker
 import { Pinecone } from '@pinecone-database/pinecone';
+import { withRetry, mistralBreaker } from './lib/resilience.js';
 import 'dotenv/config';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
@@ -8,7 +10,7 @@ const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const COST_IN  = 0.2  / 1_000_000;
 const COST_OUT = 0.6  / 1_000_000;
 
-// --- Embedding ---
+// --- Helper réseau ---
 
 function fetchWithTimeout(url, options, timeoutMs = 30_000) {
   const controller = new AbortController();
@@ -17,22 +19,28 @@ function fetchWithTimeout(url, options, timeoutMs = 30_000) {
     .finally(() => clearTimeout(timer));
 }
 
+// --- Embedding (Phase 12 : wrappé withRetry + breaker) ---
+
 async function embedText(text) {
-  const response = await fetchWithTimeout('https://api.mistral.ai/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model: 'mistral-embed', input: [text] }),
-  });
-  if (!response.ok) throw new Error(`Embedding error ${response.status}`);
-  const data = await response.json();
-  return data.data[0].embedding;
+  return mistralBreaker.call(() => withRetry(async () => {
+    const response = await fetchWithTimeout('https://api.mistral.ai/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'mistral-embed', input: [text] }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Mistral embeddings error ${response.status}: ${err}`);
+    }
+    const data = await response.json();
+    return data.data[0].embedding;
+  }));
 }
 
 // --- Phase 4 : retrieveContext ---
-// threshold rendu paramétrable en Phase 11 (défaut 0.5 = comportement original)
 
 export async function retrieveContext(query, topK = 5, threshold = 0.5) {
   if (!query || !query.trim()) return [];
@@ -56,8 +64,7 @@ export async function retrieveContext(query, topK = 5, threshold = 0.5) {
     }));
 }
 
-// --- Phase 5 : generateCompletion ---
-// temperature rendue paramétrable en Phase 11 (défaut 0.1 = comportement original)
+// --- Phase 5 (J4) + Phase 12 (J5) : generateCompletion robustifiée ---
 
 async function generateCompletion(question, context, { temperature = 0.1 } = {}) {
   const contextText = context
@@ -77,35 +84,38 @@ ${contextText}
 
 Question : ${question}`;
 
-  const response = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'mistral-small-latest',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userMessage  },
-      ],
-      temperature,
-    }),
-  });
+  // Phase 12 : circuit breaker + retry exponentiel
+  return mistralBreaker.call(() => withRetry(async () => {
+    const response = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'mistral-small-latest',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage  },
+        ],
+        temperature,
+      }),
+    });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Mistral completion error ${response.status}: ${err}`);
-  }
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Mistral completion error ${response.status}: ${err}`);
+    }
 
-  const data = await response.json();
-  return {
-    content: data.choices[0].message.content,
-    usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
-  };
+    const data = await response.json();
+    return {
+      content: data.choices[0].message.content,
+      usage: data.usage ?? { prompt_tokens: 0, completion_tokens: 0 },
+    };
+  }));
 }
 
-// --- Phase 7 : formatage des sources (dédupliquées par fichier) ---
+// --- Phase 7 : formatage des sources ---
 
 function formatSources(chunks) {
   const best = new Map();
@@ -129,15 +139,13 @@ function detectOrphanCitations(answer, numSources) {
   return orphans;
 }
 
-// --- Phase 6 : ragQuery — pipeline complète + observability ---
-// Phase 11 : ajout des options threshold et temperature
+// --- Phase 6 + 7 + 11 : ragQuery ---
 
 export async function ragQuery(question, options = {}) {
   const { topK = 5, threshold = 0.5, temperature = 0.1, verbose = false } = options;
 
   if (verbose) console.log(`[ragQuery] question="${question.slice(0, 70)}"`);
 
-  // RETRIEVE
   const t0 = Date.now();
   const chunks = await retrieveContext(question, topK, threshold);
   const retrievalMs = Date.now() - t0;
@@ -152,14 +160,9 @@ export async function ragQuery(question, options = {}) {
       `[retrieve] topK=${chunks.length} retournés en ${retrievalMs}ms, ` +
       `top score ${topScore.toFixed(2)}, avg score ${avgScore.toFixed(2)}`
     );
-    chunks.forEach(c =>
-      console.log(`  [${c.score.toFixed(2)}] ${c.source}, "${c.text.slice(0, 60)}..."`)
-    );
   }
 
-  // Pas de chunks pertinents → "je ne sais pas" sans appeler le LLM
   if (chunks.length === 0) {
-    if (verbose) console.log('[generate] aucun chunk pertinent, réponse directe');
     return {
       answer: 'Je ne trouve pas cette information dans les documents fournis.',
       sources: [],
@@ -174,7 +177,6 @@ export async function ragQuery(question, options = {}) {
     };
   }
 
-  // GENERATE
   const t1 = Date.now();
   const { content: answer, usage } = await generateCompletion(question, chunks, { temperature });
   const generationMs = Date.now() - t1;
@@ -185,15 +187,13 @@ export async function ragQuery(question, options = {}) {
 
   if (verbose) {
     console.log(
-      `[generate] mistral-small-latest, ${promptTokens} tokens in / ` +
-      `${completionTokens} tokens out, ${generationMs}ms, $${costUSD.toFixed(6)}`
+      `[generate] ${promptTokens} tok in / ${completionTokens} tok out, ` +
+      `${generationMs}ms, $${costUSD.toFixed(6)}`
     );
-    console.log(`[ragQuery] total ${retrievalMs + generationMs}ms`);
   }
 
-  // Phase 7 — sources structurées + détection de citations orphelines
-  const sources          = formatSources(chunks);
-  const orphanCitations  = detectOrphanCitations(answer, chunks.length);
+  const sources         = formatSources(chunks);
+  const orphanCitations = detectOrphanCitations(answer, chunks.length);
 
   return {
     answer,
